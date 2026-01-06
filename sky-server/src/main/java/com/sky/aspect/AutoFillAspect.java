@@ -25,7 +25,7 @@ public class AutoFillAspect {
      */
     //直接@annotation会扫描全部，影响效率，加上execution就会只扫描mp里面带AutoFill注解的方法
     @Pointcut("execution(* com.sky.mapper.*.*(..)) && @annotation(com.sky.annotation.AutoFill)")
-    public void autoFillPointCut(){}
+    public void autoFillPointCut(){}  //切入点方法
 
     /**
      * 前置通知，在通知中进行公共字段的赋值
