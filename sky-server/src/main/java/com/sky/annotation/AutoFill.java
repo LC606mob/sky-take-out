@@ -11,8 +11,8 @@ import java.lang.annotation.Target;
  * 自定义注解，用于标识某个方法需要进行功能字段自动填充处理
  * 使用方式：@AutoFill(value = OperationType.INSERT)
  */
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)    // 标识要使用到的目标方法
+@Retention(RetentionPolicy.RUNTIME)  //标识注解生效的生命周期
 public @interface AutoFill {
     //数据库操作类型：UPDATE INSERT
     //value()是属性，但是采用了方法的声明方式
