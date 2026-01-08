@@ -70,5 +70,43 @@ public class OrderController {
         return Result.success(pageResult);
     }
 
+    /**
+     * 查询订单详情
+     * @param id
+     * @return
+     */
+    @GetMapping("/orderDetail/{id}")
+    @ApiOperation("查询订单详情")
+    private Result<OrderVO> details(@PathVariable Long id){
+        log.info("查询订单:{}详情",id);
+        OrderVO orderVO = orderService.details(id);
+        return Result.success(orderVO);
+    }
 
+    /**
+     * 取消订单
+     * @param id
+     * @return
+     */
+    @PutMapping("/cancel/{id}")
+    @ApiOperation("取消订单")
+    private Result cancel(@PathVariable Long id){
+        log.info("取消订单{}",id);
+        orderService.userCancelById(id);
+        return Result.success();
+    }
+
+
+    /**
+     * 再来一单
+     * @param id
+     * @return
+     */
+    @PostMapping("/repetition/{id}")
+    @ApiOperation("再来一单")
+    private Result repetition(@PathVariable Long id){
+        log.info("再来一单{}",id);
+        orderService.repetition(id);
+        return Result.success();
+    }
 }

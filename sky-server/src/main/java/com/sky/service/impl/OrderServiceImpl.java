@@ -206,4 +206,93 @@ public class OrderServiceImpl implements OrderService {
         return new PageResult(page.getTotal(), list);
     }
 
+    @Transactional
+    public OrderVO details(Long id) {
+        //业务逻辑：
+        //1. 查询订单主表：调用 orderMapper.getById(id) 获取订单基本信息。
+        Orders order = orderMapper.getById(id);
+        //2. 查询订单明细表：调用 orderDetailMapper.getByOrderId(id) 获取该订单关联的所有菜品/套餐明细。
+        List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
+        //3. 封装 VO 对象：创建 OrderVO 对象，利用 BeanUtils.copyProperties 拷贝基本属性，并将明细列表设置进去。
+        OrderVO orderVO = new OrderVO();
+        BeanUtils.copyProperties(order,orderVO);
+        orderVO.setOrderDetailList(orderDetailList);
+        return orderVO;
+    }
+
+    @Override
+    public void userCancelById(Long id) {
+        //订单状态 1待付款 2待接单 3已接单 4派送中 5已完成 6已取消 7已退款
+        //支付状态 0未支付 1已支付 2退款
+        //业务逻辑：
+        //直接取消：只有处于“待支付”或“待接单”状态时，用户才可以直接在小程序端取消订单。
+        //电话沟通：若订单已处于“已接单”或“派送中”状态，用户需通过电话与商家沟通取消。
+        //退款逻辑：如果订单在“待接单”状态下被取消（此时用户已付款），系统需要自动调用微信支付退款接口为用户退款。
+        //状态变更：取消成功后，需将订单状态修改为“已取消”。
+
+        Orders ordersDB =  orderMapper.getById(id);
+        // 校验订单是否存在
+        if (ordersDB == null) {
+            throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+        }
+
+        //订单状态 1待付款 2待接单 3已接单 4派送中 5已完成 6已取消
+        if (ordersDB.getStatus() > 2) {
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+
+
+        Orders orders = new Orders();
+        orders.setId(ordersDB.getId());
+
+        // 订单处于待接单状态下取消，需要进行退款
+        if (ordersDB.getStatus().equals(Orders.TO_BE_CONFIRMED)) {
+            //调用微信支付退款接口
+
+//            weChatPayUtil.refund(
+//                    ordersDB.getNumber(), //商户订单号
+//                    ordersDB.getNumber(), //商户退款单号
+//                    new BigDecimal(0.01),//退款金额，单位 元
+//                    new BigDecimal(0.01));//原订单金额
+
+            // 我们假装退款成功了，直接修改状态即可
+            //支付状态修改为 退款
+            orders.setPayStatus(Orders.REFUND);
+        }
+
+        // 更新订单状态、取消原因、取消时间
+        orders.setStatus(Orders.CANCELLED);
+        orders.setCancelReason("用户取消");
+        orders.setCancelTime(LocalDateTime.now());
+        orderMapper.update(orders);
+
+
+    }
+
+    @Override
+    public void repetition(Long id) {
+        //1. 获取当前用户 ID：通过 BaseContext.getCurrentId() 获取。
+        //2. 查询订单明细：根据订单 ID 调用 orderDetailMapper.getByOrderId(id) 获取商品列表。
+        //3. 对象转换与封装：将每一个 OrderDetail 对象转换为 ShoppingCart 对象，并设置当前用户 ID 和创建时间。
+        //4. 批量插入：调用 shoppingCartMapper.insertBatch() 写入数据库
+
+        // 1. 查询当前用户id
+        Long userId = BaseContext.getCurrentId();
+
+        // 2. 根据订单id查询当前订单详情
+        List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
+
+        // 3. 将订单详情对象转换为购物车对象
+        List<ShoppingCart> shoppingCartList = new ArrayList<>();
+        for (OrderDetail orderDetail : orderDetailList) {
+            ShoppingCart shoppingCart = new ShoppingCart();
+            BeanUtils.copyProperties(orderDetail,shoppingCart,"id");
+            shoppingCart.setUserId(userId);
+            shoppingCart.setCreateTime(LocalDateTime.now());
+            shoppingCartList.add(shoppingCart);
+        }
+        shoppingCartMapper.insertBatch(shoppingCartList);
+    }
+
+
 }
