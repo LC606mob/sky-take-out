@@ -5,9 +5,7 @@ import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.sky.constant.MessageConstant;
 import com.sky.context.BaseContext;
-import com.sky.dto.OrdersPageQueryDTO;
-import com.sky.dto.OrdersPaymentDTO;
-import com.sky.dto.OrdersSubmitDTO;
+import com.sky.dto.*;
 import com.sky.entity.*;
 import com.sky.exception.AddressBookBusinessException;
 import com.sky.exception.OrderBusinessException;
@@ -17,6 +15,7 @@ import com.sky.result.PageResult;
 import com.sky.service.OrderService;
 import com.sky.utils.WeChatPayUtil;
 import com.sky.vo.OrderPaymentVO;
+import com.sky.vo.OrderStatisticsVO;
 import com.sky.vo.OrderSubmitVO;
 import com.sky.vo.OrderVO;
 import org.springframework.beans.BeanUtils;
@@ -42,6 +41,9 @@ public class OrderServiceImpl implements OrderService {
     private ShoppingCartMapper shoppingCartMapper;
     @Autowired
     private UserMapper userMapper;
+
+
+
     @Autowired
     private WeChatPayUtil weChatPayUtil;
 
@@ -294,5 +296,192 @@ public class OrderServiceImpl implements OrderService {
         shoppingCartMapper.insertBatch(shoppingCartList);
     }
 
+    /**
+     * 订单搜索
+     * @param ordersPageQueryDTO
+     * @return
+     */
+    public PageResult conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO) {
+        //业务逻辑：
+        //    1. 调用 PageHelper.startPage 开启分页。
+        //    2. 调用 orderMapper.pageQuery 获取分页后的 Orders 列表。
+        //    3. 关键步骤：将 Orders 转换为 OrderVO。在转换过程中，需要查询订单明细，并将菜品名称与数量拼接成字符串（例如：getOrderDishesStr 方法）
 
+        PageHelper.startPage(ordersPageQueryDTO.getPage(),ordersPageQueryDTO.getPageSize());
+        Page<Orders> page = orderMapper.pageQuery(ordersPageQueryDTO);
+        return new PageResult(page.getTotal(),page.getResult());
+    }
+
+    /**
+     * 各个状态的订单数量统计
+     * @return
+     */
+    public OrderStatisticsVO statistics() {
+        // 根据状态，分别查询出待接单、待派送、派送中的订单数量
+        Integer toBeConfirmed = orderMapper.countStatus(Orders.TO_BE_CONFIRMED);
+        Integer confirmed = orderMapper.countStatus(Orders.CONFIRMED);
+        Integer deliveryInProgress = orderMapper.countStatus(Orders.DELIVERY_IN_PROGRESS);
+
+        // 将查询出的数据封装到orderStatisticsVO对象中响应
+        OrderStatisticsVO orderStatisticsVO = new OrderStatisticsVO();
+        orderStatisticsVO.setToBeConfirmed(toBeConfirmed);
+        orderStatisticsVO.setConfirmed(confirmed);
+        orderStatisticsVO.setDeliveryInProgress(deliveryInProgress);
+        return orderStatisticsVO;
+    }
+
+    /**
+     * 接单
+     *
+     * @param ordersConfirmDTO
+     */
+    public void confirm(OrdersConfirmDTO ordersConfirmDTO) {
+        Orders order = Orders.builder()
+                .id(ordersConfirmDTO.getId())
+                .status(Orders.CONFIRMED)
+                .build();
+        orderMapper.update(order);
+    }
+
+    /**
+     * 拒单
+     * @param ordersRejectionDTO
+     */
+    public void rejection(OrdersRejectionDTO ordersRejectionDTO) {
+        //业务逻辑：
+        //1. 查询并校验订单：根据 ID 查询订单，校验订单是否存在且状态是否为“待接单”；若不符合条件，抛出 OrderBusinessException。
+        //2. 退款处理：检查订单的支付状态，若为“已支付”，调用 weChatPayUtil.refund 发起退款。
+        //3. 更新订单状态：构造一个 Orders 对象，设置 ID、状态为“已取消”、拒单原因以及取消时间，最后调用 orderMapper.update
+        Orders ordersDB = orderMapper.getById(ordersRejectionDTO.getId());
+        if (ordersDB == null || !ordersDB.getStatus().equals(Orders.TO_BE_CONFIRMED)){
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+
+        // 2. 支付状态判断 (模拟退款逻辑)
+        Integer payStatus = ordersDB.getPayStatus();
+        // 只有“已支付”的订单，取消时才需要修改支付状态为“退款”
+        // 如果是“未支付”的订单，取消时支付状态应该保持“未支付”不变
+        if (Orders.PAID.equals(payStatus)) {
+// 这里注释掉了调用微信退款接口的代码---学习中用不了
+//                  //用户已支付，需要退款
+//            String refund = weChatPayUtil.refund(
+//                    ordersDB.getNumber(),
+//                    ordersDB.getNumber(),
+//                    new BigDecimal(0.01),
+//                    new BigDecimal(0.01));
+//            log.info("申请退款：{}", refund);
+
+            payStatus = Orders.REFUND;
+        }
+
+        // 拒单需要退款，根据订单id更新订单状态、拒单原因、取消时间
+        Orders orders = new Orders();
+        orders.setId(ordersDB.getId());
+        orders.setStatus(Orders.CANCELLED);
+        orders.setRejectionReason(ordersRejectionDTO.getRejectionReason());
+        orders.setCancelTime(LocalDateTime.now());
+        orders.setPayStatus(payStatus);
+        orderMapper.update(orders);
+    }
+
+
+    /**
+     * 取消订单
+     * @param ordersCancelDTO
+     */
+    public void cancel(OrdersCancelDTO ordersCancelDTO) {
+        //业务逻辑：
+        //• 状态变更：操作成功后，订单状态必须修改为“已取消”。
+        //• 填写原因：商家在取消时必须输入取消原因（cancelReason）。
+        //• 退款处理：系统需检查订单支付状态。如果用户已经完成了支付（pay_status == 1），商家取消订单时，系统必须自动调用微信支付退款接口完成退款
+
+        //1. 查询订单：调用 orderMapper.getById 获取订单详情。
+        Orders ordersDB = orderMapper.getById(ordersCancelDTO.getId());
+        //2. 支付校验与退款：检查 payStatus。若为已支付，调用 weChatPayUtil.refund 发起退款申请。
+//        if (ordersDB.getPayStatus()==Orders.PAID){
+//                        //用户已支付，需要退款
+//            String refund = weChatPayUtil.refund(
+//                    ordersDB.getNumber(),
+//                    ordersDB.getNumber(),
+//                    new BigDecimal(0.01),
+//                    new BigDecimal(0.01));
+//            log.info("申请退款：{}", refund);
+//        }
+
+        // 2. 支付状态判断 (模拟退款逻辑)
+        Integer payStatus = ordersDB.getPayStatus();
+        // 只有“已支付”的订单，取消时才需要修改支付状态为“退款”
+        // 如果是“未支付”的订单，取消时支付状态应该保持“未支付”不变
+        if (Orders.PAID.equals(payStatus)) {
+// 这里注释掉了调用微信退款接口的代码---学习中用不了
+//                  //用户已支付，需要退款
+//            String refund = weChatPayUtil.refund(
+//                    ordersDB.getNumber(),
+//                    ordersDB.getNumber(),
+//                    new BigDecimal(0.01),
+//                    new BigDecimal(0.01));
+//            log.info("申请退款：{}", refund);
+
+            payStatus = Orders.REFUND;
+        }
+
+        //3. 更新数据库：封装 Orders 对象，设置状态为“已取消”，记录取消原因和当前时间，最后调用 orderMapper.update
+        Orders order =Orders.builder()
+                .id(ordersCancelDTO.getId())
+                .status(Orders.CANCELLED)
+                .cancelReason(ordersCancelDTO.getCancelReason())
+                .payStatus(payStatus)   // 这里传入经过判断后的 payStatus
+                .cancelTime(LocalDateTime.now())
+                .build();
+        orderMapper.update(order);
+    }
+
+    /**
+     * 派送订单
+     * @param id
+     */
+    public void delivery(Long id) {
+        // 1. 根据id查询订单
+        Orders ordersDB = orderMapper.getById(id);
+        //前置条件：只有状态为“待派送”（即商家 3已接单，状态码为 3）的订单才可以执行派送操作
+        // 2. 校验订单是否存在，并且状态是否为 3 (待派送)   --订单不存在或者状态不是 3 (待派送)，抛异常
+        if (ordersDB == null || !ordersDB.getStatus().equals(Orders.CONFIRMED) ){
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+
+        // 3. 构造订单对象，更新状态为 4 (派送中)
+        Orders order = Orders.builder()
+                .id(id)
+                .status(Orders.DELIVERY_IN_PROGRESS)
+                .build();
+
+        // 4. 调用mapper修改状态
+        orderMapper.update(order);
+    }
+
+    /**
+     * 完成订单
+     * @param id
+     */
+    public void complete(Long id) {
+        //业务逻辑：
+        //1. 查询订单：调用 orderMapper.getById(id) 获取当前订单详情。
+        //2. 状态校验：确认订单是否存在，且当前状态必须为 4 (DELIVERY_IN_PROGRESS)。若校验失败，抛出业务异常 ORDER_STATUS_ERROR。
+        //3. 封装更新对象：创建一个新的 Orders 对象，设置 ID、目标状态为 5 (COMPLETED)，并记录当前时间为送达时间 (deliveryTime)。
+        //4. 持久化：调用 orderMapper.update(orders) 更新数据库
+        // 1. 根据id查询订单
+        Orders ordersDB = orderMapper.getById(id);
+        // 2. 校验订单是否存在，并且状态是否为 4 (派送中)
+        if (ordersDB == null || !ordersDB.getStatus().equals(Orders.DELIVERY_IN_PROGRESS)){
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+        // 3. 构造订单对象，更新状态为 5 (已完成)，并设置送达时间
+        Orders order = Orders.builder()
+                .id(id)
+                .status(Orders.COMPLETED)
+                .deliveryTime(LocalDateTime.now())
+                .build();
+        // 4. 执行更新
+        orderMapper.update(order);
+    }
 }
