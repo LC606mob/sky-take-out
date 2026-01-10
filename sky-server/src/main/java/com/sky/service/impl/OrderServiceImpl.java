@@ -22,6 +22,7 @@ import com.sky.vo.OrderPaymentVO;
 import com.sky.vo.OrderStatisticsVO;
 import com.sky.vo.OrderSubmitVO;
 import com.sky.vo.OrderVO;
+import com.sky.websocket.WebSocketServer;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,6 +50,8 @@ public class OrderServiceImpl implements OrderService {
     private ShoppingCartMapper shoppingCartMapper;
     @Autowired
     private UserMapper userMapper;
+    @Autowired
+    private WebSocketServer webSocketServer;
     @Value("${sky.shop.address}")
     private String shopAddress;
     @Value("${sky.baidu.ak}")
@@ -130,34 +133,64 @@ public class OrderServiceImpl implements OrderService {
         return orderSubmitVO;
     }
 
+//    /**
+//     * 订单支付
+//     *
+//     * @param ordersPaymentDTO
+//     * @return
+//     */
+//    public OrderPaymentVO payment(OrdersPaymentDTO ordersPaymentDTO) throws Exception {
+//        // 当前登录用户id
+//        Long userId = BaseContext.getCurrentId();
+//        User user = userMapper.getByUserId(userId);
+//
+//        // 【修改点2】 直接跳过微信支付调用，创建一个空的 JSON 对象
+//        // JSONObject jsonObject = weChatPayUtil.pay(
+//        //         ordersPaymentDTO.getOrderNumber(),
+//        //         new BigDecimal(0.01),
+//        //         "苍穹外卖订单",
+//        //         user.getOpenid()
+//        // );
+//
+//        // 模拟一个空的返回结果，防止报错
+//        JSONObject jsonObject = new JSONObject();
+//
+//        if (jsonObject.getString("code") != null && jsonObject.getString("code").equals("ORDERPAID")) {
+//            throw new OrderBusinessException("该订单已支付");
+//        }
+//
+//        OrderPaymentVO vo = jsonObject.toJavaObject(OrderPaymentVO.class);
+//        vo.setPackageStr(jsonObject.getString("package"));
+//
+//        return vo;
+//    }
+
     /**
-     * 订单支付
+     * 订单支付（跳过微信支付，直接修改为成功）
      *
      * @param ordersPaymentDTO
      * @return
      */
     public OrderPaymentVO payment(OrdersPaymentDTO ordersPaymentDTO) throws Exception {
-        // 当前登录用户id
+        // 1. 获取当前登录用户id (保持原逻辑)
         Long userId = BaseContext.getCurrentId();
         User user = userMapper.getByUserId(userId);
 
-        // 【修改点2】 直接跳过微信支付调用，创建一个空的 JSON 对象
-        // JSONObject jsonObject = weChatPayUtil.pay(
-        //         ordersPaymentDTO.getOrderNumber(),
-        //         new BigDecimal(0.01),
-        //         "苍穹外卖订单",
-        //         user.getOpenid()
-        // );
+        // 2. 【核心修改】直接调用支付成功的方法
+        // 我们利用订单号，直接告诉系统：这个订单已经支付成功了！
+        // paySuccess方法通常就在当前类下面，它负责修改数据库状态为“已支付”
+        // 2. 【核心修改】直接调用支付成功的方法
+        // 因为没有微信回调，我们在这里手动触发“支付成功”的后续逻辑（改状态 + 推送WebSocket）
+        paySuccess(ordersPaymentDTO.getOrderNumber());
 
-        // 模拟一个空的返回结果，防止报错
-        JSONObject jsonObject = new JSONObject();
-
-        if (jsonObject.getString("code") != null && jsonObject.getString("code").equals("ORDERPAID")) {
-            throw new OrderBusinessException("该订单已支付");
-        }
-
-        OrderPaymentVO vo = jsonObject.toJavaObject(OrderPaymentVO.class);
-        vo.setPackageStr(jsonObject.getString("package"));
+        // 3. 返回一个空对象
+        // 因为前端原本期待返回微信支付的参数，现在不需要了，返回个空的或者随便塞点东西防止报错即可
+        OrderPaymentVO vo = new OrderPaymentVO();
+        vo.setNonceStr("666"); // 随便填，反正不用
+        vo.setPaySign("666");  // 随便填
+        vo.setTimeStamp("666");// 随便填
+        vo.setSignType("666"); // 随便填
+        vo.setPackageStr("666");
 
         return vo;
     }
@@ -182,6 +215,16 @@ public class OrderServiceImpl implements OrderService {
                 .build();
 
         orderMapper.update(orders);
+
+        //////////////////////////////////////////////
+        Map map = new HashMap();
+        map.put("type", 1);//消息类型，1表示来单提醒
+        map.put("orderId", orders.getId());
+        map.put("content", "订单号：" + outTradeNo);
+
+        //通过WebSocket实现来单提醒，向客户端浏览器推送消息
+        webSocketServer.sendToAllClient(JSON.toJSONString(map));
+        ///////////////////////////////////////////////////
     }
 
     /**

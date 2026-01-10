@@ -33,15 +33,20 @@ public class OrderTask {
         //• 操作：将符合条件的订单状态改为“已取消”，并记录取消原因
         log.info("处理支付超时订单{}",new Date()); //new Date():获取程序运行到这一行代码时的精确时间（包含年月日时分秒）
 
-        //select * from orders where status = 1 and order_time < (当前时间
+        //select * from orders where status = 1 and order_time < (当前时间-15）
+        // 获得 15 分钟前的时间
         LocalDateTime time = LocalDateTime.now().plusMinutes(-15);
+        // 查询状态为待付款且下单时间小于 time 的订单
         List<Orders> ordersList = orderMapper.getByStatusAndOrdertimeLT(Orders.PENDING_PAYMENT,time);
-        for (Orders order : ordersList) {
-            order.setStatus(Orders.CANCELLED);
-            order.setCancelReason("订单超时，自动取消");
-            order.setCancelTime(LocalDateTime.now());
-            orderMapper.update(order);
+        if(ordersList != null && ordersList.size() > 0){
+            ordersList.forEach(order -> {
+                order.setStatus(Orders.CANCELLED);
+                order.setCancelReason("支付超时，自动取消");
+                order.setCancelTime(LocalDateTime.now());
+                orderMapper.update(order);
+            });
         }
+
     }
 
     /**
@@ -59,9 +64,11 @@ public class OrderTask {
         //select * from orders where status = 1 and order_time < (当前时间
         LocalDateTime time = LocalDateTime.now().plusMinutes(-60);
         List<Orders> ordersList = orderMapper.getByStatusAndOrdertimeLT(Orders.DELIVERY_IN_PROGRESS,time);
-        for (Orders order : ordersList) {
-            order.setStatus(Orders.COMPLETED);
-            orderMapper.update(order);
+        if(ordersList != null && ordersList.size() > 0){
+            ordersList.forEach(order -> {
+                order.setStatus(Orders.COMPLETED);
+                orderMapper.update(order);
+            });
         }
     }
 
